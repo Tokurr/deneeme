@@ -1,0 +1,155 @@
+// 3. Service
+package com.example.demo.service;
+
+import com.example.demo.model.Message;
+import com.example.demo.repository.MessageRepository;
+import org.springframework.stereotype.Service;
+import java.util.List;
+
+@Service
+public class MessageService {
+    private final MessageRepository repo;
+
+    public MessageService(MessageRepository repo) {
+        this.repo = repo;
+    }
+
+    public List<Message> getMessagesByReceiver(Long receiverId) {
+        if (receiverId == null) {
+            throw new IllegalArgumentException("receiverId boş olamaz");
+        }
+        if (receiverId <= 0) {
+            throw new IllegalArgumentException("receiverId pozitif olmalı");
+        }
+        return repo.findByReceiverId(receiverId);
+    }
+
+    public List<Message> getMessagesBySender(Long senderId) {
+        if (senderId == null) {
+            throw new IllegalArgumentException("senderId boş olamaz");
+        }
+        if (senderId <= 0) {
+            throw new IllegalArgumentException("senderId pozitif olmalı");
+        }
+        return repo.findBySenderId(senderId);
+    }
+}
+
+
+// 4. Controller
+package com.example.demo.controller;
+
+import com.example.demo.model.Message;
+import com.example.demo.service.MessageService;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/messages")
+@Validated
+public class MessageController {
+    private final MessageService service;
+
+    public MessageController(MessageService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/receiver/{receiverId}")
+    public ResponseEntity<List<Message>> getByReceiver(
+            @PathVariable @NotNull(message = "receiverId boş olamaz")
+                       @Min(value = 1, message = "receiverId en az 1 olmalı")
+                       Long receiverId) {
+        List<Message> messages = service.getMessagesByReceiver(receiverId);
+        return ResponseEntity.ok(messages);
+    }
+
+    @GetMapping("/sender/{senderId}")
+    public ResponseEntity<List<Message>> getBySender(
+            @PathVariable @NotNull(message = "senderId boş olamaz")
+                       @Min(value = 1, message = "senderId en az 1 olmalı")
+                       Long senderId) {
+        List<Message> messages = service.getMessagesBySender(senderId);
+        return ResponseEntity.ok(messages);
+    }
+}
+
+// 5. Global Exception Handler
+package com.example.demo.exception;
+
+// src/main/java/com/example/demo/exception/GlobalExceptionHandler.java
+package com.example.demo.exception;
+
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.*;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
+import java.util.stream.Collectors;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(
+            MethodArgumentNotValidException ex,
+            HttpServletRequest request) {
+
+        String errors = ex.getBindingResult()
+                          .getFieldErrors()
+                          .stream()
+                          .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
+                          .collect(Collectors.joining("; "));
+
+        ErrorResponse body = new ErrorResponse(
+            "Input validation failed: " + errors,
+            request.getRequestURI(),
+            LocalDateTime.now()
+        );
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(body);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArg(
+            IllegalArgumentException ex,
+            HttpServletRequest request) {
+
+        ErrorResponse body = new ErrorResponse(
+            "Geçersiz parametre: " + ex.getMessage(),
+            request.getRequestURI(),
+            LocalDateTime.now()
+        );
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(body);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleAll(
+            Exception ex,
+            HttpServletRequest request) {
+
+        logger.error("Unexpected error occurred at " + request.getRequestURI(), ex);
+
+        ErrorResponse body = new ErrorResponse(
+            "Sunucu tarafında bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
+            request.getRequestURI(),
+            LocalDateTime.now()
+        );
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(body);
+    }
+}
+
+
