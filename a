@@ -153,3 +153,63 @@ public class GlobalExceptionHandler {
 }
 
 
+
+
+/**************************
+
+// 1) Kendi RuntimeException sınıfı
+// src/main/java/com/example/demo/exception/InvalidAgeException.java
+package com.example.demo.exception;
+
+public class InvalidAgeException extends RuntimeException {
+    public InvalidAgeException(String message) {
+        super(message);
+    }
+}
+// 3) GlobalExceptionHandler – InvalidAgeException’ı yakalayıp ErrorResponse ile dönüyor
+// src/main/java/com/example/demo/exception/GlobalExceptionHandler.java
+package com.example.demo.exception;
+
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.*;
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
+
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(InvalidAgeException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidAge(
+            InvalidAgeException ex,
+            HttpServletRequest request) {
+
+        ErrorResponse body = new ErrorResponse(
+            ex.getMessage(),                      // "Yaş negatif olamaz: -5"
+            request.getRequestURI(),              // örn. "/api/users"
+            LocalDateTime.now()
+        );
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(body);
+    }
+
+    // Diğer exception’larınız için de handler’lar buraya...
+}
+package com.example.demo.service;
+
+import com.example.demo.exception.InvalidAgeException;
+import org.springframework.stereotype.Service;
+
+@Service
+public class UserService {
+    public void registerUser(String name, int age) {
+        if (age < 0) {
+            // Kendi unchecked exception’ımızı fırlatıyoruz
+            throw new InvalidAgeException("Yaş negatif olamaz: " + age);
+        }
+        // … kullanıcıyı kaydetme kodunuz (DB, repository vs.)
+    }
+}
