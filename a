@@ -1,215 +1,405 @@
-// 3. Service
-package com.example.demo.service;
+package com.example.demo;
 
-import com.example.demo.model.Message;
-import com.example.demo.repository.MessageRepository;
-import org.springframework.stereotype.Service;
+// src/main/java/com/example/demo/config/WebSocketEventListener.java (veya başka bir config paketi)
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.messaging.SessionConnectEvent;
+import org.springframework.web.socket.messaging.SessionDisconnectEvent;
+import org.springframework.web.socket.messaging.SessionSubscribeEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
+import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.messaging.SessionConnectEvent;
+import org.springframework.web.socket.messaging.SessionSubscribeEvent;
+import org.springframework.web.socket.messaging.SessionDisconnectEvent;
+
+import java.security.Principal;
 import java.util.List;
 
-@Service
-public class MessageService {
-    private final MessageRepository repo;
+@Component
+public class WebSocketEventListener {
+    private static final Logger logger = LoggerFactory.getLogger(WebSocketEventListener.class);
 
-    public MessageService(MessageRepository repo) {
-        this.repo = repo;
+    @EventListener
+    public void handleWebSocketConnectListener(SessionConnectEvent event) {
+        StompHeaderAccessor sha = StompHeaderAccessor.wrap(event.getMessage());
+        List<String> nativeHeaders = sha.getNativeHeader("userId");
+        if (nativeHeaders != null && !nativeHeaders.isEmpty()) {
+            String userId = nativeHeaders.get(0);
+            // Oturum attributes'a kaydet
+            sha.getSessionAttributes().put("userId", userId);
+            // Principal olarak ayarla
+            sha.setUser((Principal) () -> userId);
+            logger.info("WebSocket Bağlantısı kuruldu: userId={} sessionId={}", userId, sha.getSessionId());
+        } else {
+            logger.warn("WebSocket Bağlantısı sırasında userId bulunamadı: sessionId={}", sha.getSessionId());
+        }
     }
 
-    public List<Message> getMessagesByReceiver(Long receiverId) {
-        if (receiverId == null) {
-            throw new IllegalArgumentException("receiverId boş olamaz");
-        }
-        if (receiverId <= 0) {
-            throw new IllegalArgumentException("receiverId pozitif olmalı");
-        }
-        return repo.findByReceiverId(receiverId);
+    @EventListener
+    public void handleWebSocketSubscribeListener(SessionSubscribeEvent event) {
+        StompHeaderAccessor sha = StompHeaderAccessor.wrap(event.getMessage());
+        Principal user = sha.getUser();
+        String destination = sha.getDestination();
+        logger.info("WebSocket Aboneliği: userId={} dest={}", user != null ? user.getName() : "unknown", destination);
     }
 
-    public List<Message> getMessagesBySender(Long senderId) {
-        if (senderId == null) {
-            throw new IllegalArgumentException("senderId boş olamaz");
-        }
-        if (senderId <= 0) {
-            throw new IllegalArgumentException("senderId pozitif olmalı");
-        }
-        return repo.findBySenderId(senderId);
+    @EventListener
+    public void handleWebSocketDisconnectListener(SessionDisconnectEvent event) {
+        StompHeaderAccessor sha = StompHeaderAccessor.wrap(event.getMessage());
+        Principal user = sha.getUser();
+        logger.info("WebSocket Bağlantısı Kesildi: userId={} sessionId={}", user != null ? user.getName() : "unknown", sha.getSessionId());
+    }
+}
+package com.example.demo;
+
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
+import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
+import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+import org.springframework.web.socket.server.HandshakeInterceptor;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.http.server.ServletServerHttpRequest;
+
+import java.util.Map;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.web.socket.config.annotation.*;
+
+@Configuration
+@EnableWebSocketMessageBroker
+public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    @Override
+    public void configureMessageBroker(MessageBrokerRegistry config) {
+        // client → server prefix
+        config.setApplicationDestinationPrefixes("/app");
+        // server → client basit in-memory broker
+        config.enableSimpleBroker("/topic");
+    }
+
+    @Override
+    public void registerStompEndpoints(StompEndpointRegistry registry) {
+        registry
+                .addEndpoint("/ws")            // WS endpoint
+                .setAllowedOriginPatterns("*") // üretimde origin’i kısıtla
+                .withSockJS();                 // SockJS fallback
     }
 }
 
+package com.example.demo;
 
-// 4. Controller
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class Demo1Application {
+
+    public static void main(String[] args) {
+        SpringApplication.run(Demo1Application.class, args);
+    }
+
+}
+package com.example.demo;
+
+public  class ChatMessageDTO {
+    private String senderId;
+    private String receiverId;
+    private String messageText; // ALAN ADI ARTIK 'messageText'
+
+    public String getMessageText() {
+        return messageText;
+    }
+
+    public void setMessageText(String messageText) {
+        this.messageText = messageText;
+    }
+
+    public String getSenderId() {
+        return senderId;
+    }
+
+    public void setSenderId(String senderId) {
+        this.senderId = senderId;
+    }
+
+    public String getReceiverId() {
+        return receiverId;
+    }
+
+    public void setReceiverId(String receiverId) {
+        this.receiverId = receiverId;
+    }
+
+
+    // >>> buraya getters & setters yoksa Jackson bu alanları dolduramaz
+}
+
+
+package com.example.demo.service;
+
+
+import com.example.demo.model.ChatMessage;
+import com.example.demo.repository.ChatMessageRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+public class ChatService {
+
+    private final ChatMessageRepository repository;
+    private final SimpMessagingTemplate messagingTemplate;
+
+    // Gelen mesajı DB'ye kaydeder ve alıcıya topic üzerinden gönderir
+    public ChatMessage sendMessage(ChatMessage msg) {
+        msg.setTimestamp(LocalDateTime.now());
+        ChatMessage saved = repository.save(msg);
+
+        // Dinamik topic: /topic/messages/{receiverId}
+        messagingTemplate.convertAndSend(
+                "/topic/messages/" + msg.getReceiverId(),
+                saved
+        );
+
+        return saved;
+    }
+
+    // Geçmiş mesajları getirir
+    public List<ChatMessage> getHistory(String u1, String u2) {
+        return repository.findBySenderIdAndReceiverIdOrReceiverIdAndSenderId(
+                u1, u2, u1, u2
+        );
+    }
+}
+package com.example.demo.repository;
+
+import com.example.demo.model.ChatMessage;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+
+public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
+        // İki kullanıcı arasındaki tüm mesajları getirir
+        List<ChatMessage> findBySenderIdAndReceiverIdOrReceiverIdAndSenderId(
+                String senderId, String receiverId,
+                String altSenderId, String altReceiverId
+        );
+}
+package com.example.demo.model;
+
+import jakarta.persistence.*;
+import lombok.Data;
+
+
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "messages")
+@Data
+public class ChatMessage {
+
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String senderId;
+    private String receiverId;
+
+    @Column(name = "message_text", nullable = false) // BURAYI DİKKATLE OKUYUN!
+    private String messageText; // ALAN ADI ARTIK 'messageText'
+
+    private LocalDateTime timestamp;
+    // Lombok kullanıyorsanız @Data veya @Getter/@Setter ekleyebilirsiniz
+}
 package com.example.demo.controller;
 
-import com.example.demo.model.Message;
-import com.example.demo.service.MessageService;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotNull;
-import org.springframework.http.ResponseEntity;
-import org.springframework.validation.annotation.Validated;
+import com.example.demo.ChatMessageDTO;
+import com.example.demo.model.ChatMessage;
+
+import com.example.demo.service.ChatService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/messages")
-@Validated
-public class MessageController {
-    private final MessageService service;
+@RequiredArgsConstructor
+public class ChatController {
 
-    public MessageController(MessageService service) {
-        this.service = service;
+    private final ChatService chatService;
+
+    // STOMP/WebSocket ile gelen mesajı işle
+    @MessageMapping("/chat.send")
+    public void receiveMessage(ChatMessage message) {
+        chatService.sendMessage(message);
     }
 
-    @GetMapping("/receiver/{receiverId}")
-    public ResponseEntity<List<Message>> getByReceiver(
-            @PathVariable @NotNull(message = "receiverId boş olamaz")
-                       @Min(value = 1, message = "receiverId en az 1 olmalı")
-                       Long receiverId) {
-        List<Message> messages = service.getMessagesByReceiver(receiverId);
-        return ResponseEntity.ok(messages);
-    }
-
-    @GetMapping("/sender/{senderId}")
-    public ResponseEntity<List<Message>> getBySender(
-            @PathVariable @NotNull(message = "senderId boş olamaz")
-                       @Min(value = 1, message = "senderId en az 1 olmalı")
-                       Long senderId) {
-        List<Message> messages = service.getMessagesBySender(senderId);
-        return ResponseEntity.ok(messages);
+    // REST ile geçmişi çekmek istersen
+    @GetMapping("/api/chat/history")
+    public List<ChatMessage> getHistory(
+            @RequestParam String user1,
+            @RequestParam String user2
+    ) {
+        return chatService.getHistory(user1, user2);
     }
 }
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <title>Spring Boot WebSocket Chat</title>
+  <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      max-width: 600px;
+    }
+    h2 {
+      text-align: center;
+    }
+    #chat {
+      border: 1px solid #ccc;
+      padding: 10px;
+      height: 300px;
+      overflow-y: auto;
+      background: #f9f9f9;
+    }
+    .message {
+      margin: 5px 0;
+      padding: 5px 10px;
+      border-radius: 8px;
+      display: inline-block;
+      max-width: 80%;
+      word-wrap: break-word;
+    }
+    .me {
+      background: #d1e7dd;
+      align-self: flex-end;
+    }
+    .they {
+      background: #f8d7da;
+      align-self: flex-start;
+    }
+    #controls, #setup {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    #controls input {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+<h2>Birebir WebSocket Chat</h2>
 
-// 5. Global Exception Handler
-package com.example.demo.exception;
+<div id="setup">
+  <input type="text" id="myId" placeholder="Kendi ID (ör: userA)" />
+  <input type="text" id="peerId" placeholder="Sohbet Edilecek ID (ör: userB)" />
+  <button id="btnConnect">Bağlan &amp; Geçmişi Getir</button>
+</div>
 
-// src/main/java/com/example/demo/exception/GlobalExceptionHandler.java
-package com.example.demo.exception;
+<div id="chat" style="display: flex; flex-direction: column;"></div>
 
-import jakarta.servlet.http.HttpServletRequest;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.http.*;
-import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.annotation.*;
+<div id="controls" style="display: none;">
+  <input type="text" id="msgInput" placeholder="Mesajınızı yazın..." />
+  <button id="btnSend">Gönder</button>
+</div>
 
-import java.time.LocalDateTime;
-import java.util.stream.Collectors;
+<script>
+  let stompClient = null;
+  let myId = null;
+  let peerId = null;
 
-@RestControllerAdvice
-public class GlobalExceptionHandler {
-    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
-
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidation(
-            MethodArgumentNotValidException ex,
-            HttpServletRequest request) {
-
-        String errors = ex.getBindingResult()
-                          .getFieldErrors()
-                          .stream()
-                          .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
-                          .collect(Collectors.joining("; "));
-
-        ErrorResponse body = new ErrorResponse(
-            "Input validation failed: " + errors,
-            request.getRequestURI(),
-            LocalDateTime.now()
-        );
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
-                .body(body);
+  document.getElementById('btnConnect').addEventListener('click', () => {
+    myId = document.getElementById('myId').value.trim();
+    peerId = document.getElementById('peerId').value.trim();
+    if (!myId || !peerId) {
+      alert('Lütfen hem kendi ID hem de sohbet edilecek ID girin.');
+      return;
     }
 
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalArg(
-            IllegalArgumentException ex,
-            HttpServletRequest request) {
+    // UI ayarları
+    document.getElementById('setup').style.display = 'none';
+    document.getElementById('controls').style.display = 'flex';
+    document.getElementById('chat').innerHTML = '';
 
-        ErrorResponse body = new ErrorResponse(
-            "Geçersiz parametre: " + ex.getMessage(),
-            request.getRequestURI(),
-            LocalDateTime.now()
-        );
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
-                .body(body);
-    }
+    // WebSocket bağlantısı
+    const socket = new SockJS('/ws');
+    stompClient = Stomp.over(socket);
+    stompClient.connect({}, frame => {
+      console.log('Connected: ' + frame);
 
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleAll(
-            Exception ex,
-            HttpServletRequest request) {
+      // Dinamik topic: sadece kendi ID'm için subscribe ol
+      stompClient.subscribe(`/topic/messages/${myId}`, message => {
+        const chat = JSON.parse(message.body);
+        displayMessage(chat);
+      });
 
-        logger.error("Unexpected error occurred at " + request.getRequestURI(), ex);
+      // Geçmiş mesajları çek ve göster
+      fetch(`/api/chat/history?user1=${myId}&user2=${peerId}`)
+              .then(res => res.json())
+              .then(list => {
+                list
+                        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                        .forEach(displayMessage);
+              })
+              .catch(err => console.error('Geçmiş yüklenirken hata:', err));
+    });
+  });
 
-        ErrorResponse body = new ErrorResponse(
-            "Sunucu tarafında bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
-            request.getRequestURI(),
-            LocalDateTime.now()
-        );
-        return ResponseEntity
-                .status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(body);
-    }
-}
+  document.getElementById('btnSend').addEventListener('click', () => {
+    const text = document.getElementById('msgInput').value.trim();
+    if (!text) return;
 
+    const payload = {
+      senderId: myId,
+      receiverId: peerId,
+      messageText: text
+    };
 
+    // STOMP ile gönder
+    stompClient.send('/app/chat.send', {}, JSON.stringify(payload));
+    document.getElementById('msgInput').value = '';
+    // Gönderince anında göster
+    displayMessage({ ...payload, timestamp: new Date().toISOString() });
+  });
 
+  function displayMessage(msg) {
+    const container = document.getElementById('chat');
+    const div = document.createElement('div');
+    const isMe = msg.senderId === myId;
 
-/**************************
-
-// 1) Kendi RuntimeException sınıfı
-// src/main/java/com/example/demo/exception/InvalidAgeException.java
-package com.example.demo.exception;
-
-public class InvalidAgeException extends RuntimeException {
-    public InvalidAgeException(String message) {
-        super(message);
-    }
-}
-// 3) GlobalExceptionHandler – InvalidAgeException’ı yakalayıp ErrorResponse ile dönüyor
-// src/main/java/com/example/demo/exception/GlobalExceptionHandler.java
-package com.example.demo.exception;
-
-import jakarta.servlet.http.HttpServletRequest;
-import org.slf4j.*;
-import org.springframework.http.*;
-import org.springframework.web.bind.annotation.*;
-
-import java.time.LocalDateTime;
-
-@RestControllerAdvice
-public class GlobalExceptionHandler {
-    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
-
-    @ExceptionHandler(InvalidAgeException.class)
-    public ResponseEntity<ErrorResponse> handleInvalidAge(
-            InvalidAgeException ex,
-            HttpServletRequest request) {
-
-        ErrorResponse body = new ErrorResponse(
-            ex.getMessage(),                      // "Yaş negatif olamaz: -5"
-            request.getRequestURI(),              // örn. "/api/users"
-            LocalDateTime.now()
-        );
-        return ResponseEntity
-                .status(HttpStatus.BAD_REQUEST)
-                .body(body);
-    }
-
-    // Diğer exception’larınız için de handler’lar buraya...
-}
-package com.example.demo.service;
-
-import com.example.demo.exception.InvalidAgeException;
-import org.springframework.stereotype.Service;
-
-@Service
-public class UserService {
-    public void registerUser(String name, int age) {
-        if (age < 0) {
-            // Kendi unchecked exception’ımızı fırlatıyoruz
-            throw new InvalidAgeException("Yaş negatif olamaz: " + age);
-        }
-        // … kullanıcıyı kaydetme kodunuz (DB, repository vs.)
-    }
-}
+    div.classList.add('message', isMe ? 'me' : 'they');
+    const time = new Date(msg.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+    div.innerHTML = `
+        <strong>${msg.senderId}</strong>: ${msg.messageText}
+        <div style="font-size:0.75em; color:#555; margin-top:2px;">${time}</div>
+      `;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+  }
+</script>
+</body>
+</html>
