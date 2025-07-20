@@ -145,3 +145,145 @@ public interface MessageRepository extends JpaRepository<Message,Integer> {
 }
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+package com.example.stajprjoe.controller;
+
+import com.example.stajprjoe.request.SearchRequest;
+import com.example.stajprjoe.response.MessageResponseDto;
+import com.example.stajprjoe.service.MessageService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequiredArgsConstructor
+@RequestMapping(path = "/messages")
+public class MessageController {
+
+    private final  MessageService messageService;
+
+    @GetMapping("/page")
+    public Page<MessageResponseDto> getMessages(
+            @RequestParam String user1,
+            @RequestParam String user2,
+            @PageableDefault(
+                    page = 0,
+                    size  = 20,
+                    sort  = "timestamp",
+                    direction = Sort.Direction.DESC
+            ) Pageable pageable
+    ) {
+        return messageService.getConversation(user1, user2, pageable);
+    }
+    @GetMapping("/search")
+    public Page<MessageResponseDto> searchMessages(
+            @RequestParam String user1,
+            @RequestParam String user2,
+            @RequestParam String keyword,
+            @PageableDefault(
+                    page = 0,
+                    size  = 10,
+                    sort  = "timestamp",
+                    direction = Sort.Direction.DESC
+            ) Pageable pageable
+    ) {
+        return messageService.searchConversation(user1, user2, keyword, pageable);
+    }
+}
+package com.example.stajprjoe.service;
+
+
+import com.example.stajprjoe.Mapper;
+import com.example.stajprjoe.request.SearchRequest;
+import com.example.stajprjoe.response.MessageResponseDto;
+import com.example.stajprjoe.repository.MessageRepository;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+
+
+@Service
+@RequiredArgsConstructor
+public class MessageService {
+
+    private final MessageRepository messageRepository;
+
+    private final Mapper mapper = new Mapper();
+
+    public Page<MessageResponseDto> getConversation(String user1, String user2, Pageable pageable) {
+        return messageRepository
+                .findBySenderIdAndReceiverIdOrReceiverIdAndSenderId(user1, user2, user1, user2, pageable)
+                .map(mapper::messageToResponseDto);
+    }
+
+    public Page<MessageResponseDto> searchConversation(
+            String user1,
+            String user2,
+            String keyword,
+            Pageable pageable
+    ) {
+        return messageRepository
+                .findBySenderIdAndReceiverIdAndMessageTextContainingIgnoreCaseOrReceiverIdAndSenderIdAndMessageTextContainingIgnoreCase(
+                        user1, user2, keyword,
+                        user1, user2, keyword,
+                        pageable
+                )
+                .map(mapper::messageToResponseDto);
+    }
+}
+
+
+package com.example.stajprjoe.repository;
+
+import com.example.stajprjoe.model.Message;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
+
+@Repository
+public interface MessageRepository extends JpaRepository<Message,Integer> {
+
+
+
+    Page<Message> findBySenderIdAndReceiverIdOrReceiverIdAndSenderId(
+            String senderId, String receiverId,
+            String altSenderId, String altReceiverId,
+            Pageable pageable
+    );
+
+    Page<Message> findBySenderIdAndReceiverIdAndMessageTextContainingIgnoreCaseOrReceiverIdAndSenderIdAndMessageTextContainingIgnoreCase(
+            String senderId, String receiverId, String keyword1,
+            String altSenderId, String altReceiverId, String keyword2,
+            Pageable pageable
+    );
+}
+
+
+
+
